@@ -9,7 +9,7 @@ import { createAdminClient } from "@/lib/supabase/admin";
 import { CATEGORY_INFO, type CategoryCode } from "@/lib/booking/categories";
 import { STATUS_LABELS, type BookingStatus } from "@/lib/booking/status";
 import { isShown, optionLabel, SOURCE_OPTIONS, todayIST } from "@/lib/validation";
-import { availableActions, defaultAdvance, defaultDeadline, type AvailableAction } from "./actions";
+import { availableActions, defaultAdvance, defaultDeadline, MAX_REJECT_EXTENSIONS, type AvailableAction } from "./actions";
 import type { StaffSession } from "./auth";
 import { isRestricted, type FlagCode } from "./flags";
 import { formatRupees, formatShortIST, formatUntil, maskEmail, maskPhone } from "./format";
@@ -68,6 +68,7 @@ type Row = Record<string, unknown> & {
   deadline_extended: boolean;
   refund_decision: string | null;
   refund_amount: string | number | null;
+  reject_extensions_used: number | null;
   created_at: string;
   updated_at: string;
 };
@@ -205,6 +206,9 @@ export async function loadBookingDetail(session: StaffSession, code: string, now
   if (b.status === "info_requested") flags.push("info_requested");
   if (b.status === "in_review" && lastVisible?.kind === "reply") flags.push("replied");
   if (!b.owner_id && !["completed", "declined", "expired", "cancelled"].includes(b.status)) flags.push("unassigned");
+  if (b.status === "confirmed" && (event ? new Date(event.starts_at).getTime() < now : !!b.preferred_date && b.preferred_date < todayIST())) {
+    flags.push("event_passed");
+  }
 
   const datePassed = event
     ? new Date(event.starts_at).getTime() < now
@@ -333,6 +337,8 @@ export async function loadBookingDetail(session: StaffSession, code: string, now
       latestPayment: latestSubmitted ? { amountPaid: latestSubmitted.amountPaid, amountDue: latestSubmitted.amountDue, utr: latestSubmitted.utr } : null,
       paidTotal,
       paid: b.status === "payment_submitted" || b.status === "confirmed",
+      // "Reject payment + extend 24 hours" is capped per booking (DB: reject_extensions_used).
+      rejectExtensionsLeft: Math.max(0, MAX_REJECT_EXTENSIONS - (b.reject_extensions_used ?? 0)),
     },
   };
 }

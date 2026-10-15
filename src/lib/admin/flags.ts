@@ -9,7 +9,8 @@ export type FlagCode =
   | "restricted"
   | "info_requested"
   | "replied"
-  | "unassigned";
+  | "unassigned"
+  | "event_passed";
 
 export const FLAG_LABELS: Record<FlagCode, string> = {
   overdue: "Overdue",
@@ -21,6 +22,7 @@ export const FLAG_LABELS: Record<FlagCode, string> = {
   info_requested: "Info requested",
   replied: "Replied",
   unassigned: "Unassigned",
+  event_passed: "Event passed",
 };
 
 /** Flags offered as pipeline filters. */

@@ -332,7 +332,29 @@ ok('4 failed logins: not locked yet', (await db.query(`select public.staff_login
 await db.query(`select public.record_staff_login('who@x.com', false)`);
 ok('5 failed logins in 15 minutes: locked', (await db.query(`select public.staff_login_locked(' WHO@x.com ') l`)).rows[0].l === true);
 ok('failed logins are audited', (await db.query(`select count(*)::int n from public.audit_log where action='staff.login_failed' and entity_id='who@x.com'`)).rows[0].n === 5);
-await throws('anon cannot call staff_action', () => as('anon', null, `select public.staff_action(gen_random_uuid(), gen_random_uuid(), 'add_note')`), 'permission denied');
+// 15. "Reject payment + extend 24h" at most twice per booking
+const rx = await create({ category: 'podcast', phone: '+919800000045', budget: '20000' });
+await act(adm, rx.id, 'start_review');
+await act(adm, rx.id, 'approve', { advance_amount: 10000, payment_deadline: inH(24) });
+const deadlineOf = async (id) => new Date((await db.query(`select payment_deadline d from public.bookings where id=$1`, [id])).rows[0].d).getTime();
+for (let i = 1; i <= 2; i++) {
+  const before = await deadlineOf(rx.id);
+  await db.query(`select public.submit_payment($1, 'upi', 10000, $2, current_date)`, [rx.id, `80000000000${i}`]);
+  await act(adm, rx.id, 'reject_payment', { reason: 'utr_not_found', extend_24h: true });
+  ok(`reject + extend 24h use ${i} of 2: deadline moved 24 hours`, Math.round((await deadlineOf(rx.id) - before) / 3600e3) === 24);
+}
+await db.query(`select public.submit_payment($1, 'upi', 10000, '800000000003', current_date)`, [rx.id]);
+await throws('a third reject + extend 24h is refused', () => act(adm, rx.id, 'reject_payment', { reason: 'utr_not_found', extend_24h: true }), 'extended twice');
+ok('the refused attempt changed nothing (still payment submitted, payment not rejected)',
+  (await statusOf(rx.id)) === 'payment_submitted' &&
+  (await db.query(`select status from public.payments where utr='800000000003'`)).rows[0].status === 'submitted');
+await act(adm, rx.id, 'reject_payment', { reason: 'utr_not_found' });
+ok('rejecting without the extension still works after the cap', (await statusOf(rx.id)) === 'payment_pending' &&
+  (await db.query(`select reject_extensions_used n from public.bookings where id=$1`, [rx.id])).rows[0].n === 2);
+await act(adm, rx.id, 'extend_deadline', { payment_deadline: new Date(await deadlineOf(rx.id) + 24 * 3600e3).toISOString() });
+ok('the separate one-time "Extend deadline" is unaffected', (await db.query(`select deadline_extended e from public.bookings where id=$1`, [rx.id])).rows[0].e === true);
+
+await throws('anon cannot call staff_action',() => as('anon', null, `select public.staff_action(gen_random_uuid(), gen_random_uuid(), 'add_note')`), 'permission denied');
 await throws('staff cannot call staff_action directly', () => as('authenticated', adm, `select public.staff_action('${adm}', '${k.id}', 'add_note', '{"body":"x"}')`), 'permission denied');
 
 console.log(`\n${pass} passed, ${fail} failed`);

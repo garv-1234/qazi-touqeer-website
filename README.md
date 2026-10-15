@@ -23,7 +23,8 @@ and Supabase. The Phase 1 spec is the "Qazi Touqeer Website — Phase 1 PRD" doc
 2. Open **SQL Editor → New query** and run each file in `supabase/migrations/`
    in name order (paste the whole file, click **Run**), one query per file:
    `20261015000000_init.sql`, `20261017000000_booking_engine.sql`,
-   `20261018000000_meetup_cutoff.sql`, then `20261019000000_admin_core.sql`.
+   `20261018000000_meetup_cutoff.sql`, `20261019000000_admin_core.sql`, then
+   `20261020000000_reject_extension_cap.sql`.
    Each should finish with "Success. No rows returned".
 3. Create the first staff login: **Authentication → Users → Add user**
    (email + password, tick "Auto confirm"). Copy the new user's ID, then run:

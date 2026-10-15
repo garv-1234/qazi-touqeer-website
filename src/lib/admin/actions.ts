@@ -50,6 +50,9 @@ export const DECLINE_REASONS = [
   ["other", "Other"],
 ] as const;
 
+/** "Reject payment + also extend the deadline by 24 hours" uses per booking (DB enforces the same). */
+export const MAX_REJECT_EXTENSIONS = 2;
+
 export const REJECT_PAYMENT_REASONS = [
   ["utr_not_found", "UTR not found in our account"],
   ["amount_mismatch", "Amount doesn't match"],

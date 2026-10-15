@@ -237,6 +237,10 @@ export async function loadPipeline(session: StaffSession, f: PipelineFilters, no
     if (b.status === "info_requested") flags.push("info_requested");
     if (replied.has(b.id)) flags.push("replied");
     if (!b.owner_id && !CLOSED.includes(b.status)) flags.push("unassigned");
+    // Confirmed, but the event (or preferred date) is behind us: ready to mark completed.
+    if (b.status === "confirmed" && (b.events ? new Date(b.events.starts_at).getTime() < now : !!b.preferred_date && b.preferred_date < istDate(new Date(now).toISOString()))) {
+      flags.push("event_passed");
+    }
     const date = b.events ? istDate(b.events.starts_at) : b.preferred_date;
     const ownerName = b.owner_id ? (names.get(b.owner_id) ?? "Unknown") : null;
     return {

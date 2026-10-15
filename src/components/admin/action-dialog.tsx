@@ -73,7 +73,7 @@ export function ActionDialog({ action, detail, run, busy, onClose }: Props) {
       body = <MarkPaid detail={detail} footer={footer} submit={submit} />;
       break;
     case "reject_payment":
-      body = <ReasonForm reasons={REJECT_PAYMENT_REASONS} confirm={null} label="Reject payment" footer={footer} submit={submit} fieldError={fieldError} extend />;
+      body = <ReasonForm reasons={REJECT_PAYMENT_REASONS} confirm={null} label="Reject payment" footer={footer} submit={submit} fieldError={fieldError} extend={detail.inputs.rejectExtensionsLeft > 0} />;
       break;
     case "extend_deadline":
       body = <Extend detail={detail} footer={footer} submit={submit} fieldError={fieldError} />;

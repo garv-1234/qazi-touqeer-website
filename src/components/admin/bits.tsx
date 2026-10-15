@@ -14,6 +14,7 @@ const FLAG_TONE: Record<FlagCode, string> = {
   info_requested: "bg-sky-100 text-sky-900",
   replied: "bg-sky-100 text-sky-900",
   unassigned: "bg-neutral-100 text-neutral-700",
+  event_passed: "bg-amber-100 text-amber-900",
 };
 
 export function FlagBadges({ flags }: { flags: FlagCode[] }) {

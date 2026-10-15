@@ -60,7 +60,8 @@ supabase/migrations/*_init.sql       schema, functions, triggers, RLS, seed
 supabase/migrations/*_booking_engine.sql  requester-move guard, OTP, submit_payment, reply, events
 supabase/migrations/*_meetup_cutoff.sql    meetups close 24 h before start; published_events.bookings_open
 supabase/migrations/*_admin_core.sql       staff_action() for every admin action, queue_message(), login attempts
-supabase/tests/db-rules.test.mjs     102 database rule tests (applies every migration in order)
+supabase/migrations/*_reject_extension_cap.sql  "reject payment + extend 24 h" max 2 per booking
+supabase/tests/db-rules.test.mjs     108 database rule tests (applies every migration in order)
 src/lib/supabase/{admin,server,browser}.ts
 src/lib/booking/status.ts            statuses + allowed moves + requester moves (mirror of DB)
 src/lib/booking/{categories,events}.ts  booking copy, next-step text, IST/₹ formatting (shared)
@@ -154,4 +155,8 @@ src/app/                             pages and API routes
 - Events, Settings, Staff and Audit pages are placeholders with role checks (step 3b).
   Until Settings exists, payment details are edited in the `settings` table (`payment_details`).
 - Confirmed bookings stay in the Confirmed column after the event date (so they can be marked
-  completed); the spec's "event in the future" wording isn't applied there.
+  completed); the spec's "event in the future" wording isn't applied there. Those cards carry an
+  "Event passed" badge.
+- "Reject payment" can also extend the deadline by 24 hours at most twice per booking
+  (`bookings.reject_extensions_used`, `MAX_REJECT_EXTENSIONS`); then the option is hidden. This is
+  separate from the one-time "Extend deadline" action.
