@@ -1,11 +1,12 @@
 "use client";
 
 import { useEffect, useRef } from "react";
-import type { BotFields } from "@/lib/validation";
+import { BOT_MIN_FILL_MS, type BotFields } from "@/lib/validation";
 
 /**
  * Honeypot + time trap for public forms. Render `honeypot` inside the form and
- * send `bot()` with the request.
+ * send `bot()` with the request. `waitForMinFill()` holds a very quick first
+ * request until the server's minimum fill time has passed.
  */
 export function useBotCheck() {
   const startedAt = useRef(0);
@@ -28,5 +29,10 @@ export function useBotCheck() {
     started_at: startedAt.current || Date.now(),
   });
 
-  return { honeypot, bot };
+  const waitForMinFill = async () => {
+    const wait = BOT_MIN_FILL_MS + 250 - (Date.now() - (startedAt.current || Date.now()));
+    if (wait > 0) await new Promise((r) => setTimeout(r, wait));
+  };
+
+  return { honeypot, bot, waitForMinFill };
 }

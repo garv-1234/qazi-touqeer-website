@@ -1,10 +1,19 @@
 "use client";
 
-import { useState } from "react";
+import { useState, useSyncExternalStore } from "react";
 import { Button, Notice, TextField } from "@/components/ui";
 import { postJson } from "@/lib/client/api";
 import { normalizePhone, type OtpPurpose } from "@/lib/validation";
 import { useBotCheck } from "./bot-check";
+
+const noopSubscribe = () => () => {};
+/** False in the server HTML and until React hydrates, then true. */
+const useHydrated = () =>
+  useSyncExternalStore(
+    noopSubscribe,
+    () => true,
+    () => false,
+  );
 
 type Props = {
   purpose: OtpPurpose;
@@ -17,7 +26,8 @@ type Props = {
 
 /** FR-B5: verify the WhatsApp number with a 6-digit code. */
 export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Props) {
-  const { honeypot, bot } = useBotCheck();
+  const { honeypot, bot, waitForMinFill } = useBotCheck();
+  const hydrated = useHydrated();
   const [phone, setPhone] = useState("");
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [code, setCode] = useState("");
@@ -35,6 +45,7 @@ export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Prop
     if (!normalized) return setPhoneError("Enter a valid mobile number (add the country code if not Indian)");
 
     setBusy(true);
+    await waitForMinFill(); // a very quick click would otherwise fail the server's bot check
     const res = await postJson<{ ok: true; dev_code?: string }>("/api/otp/send", {
       phone: normalized,
       purpose,
@@ -62,6 +73,18 @@ export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Prop
     onVerified(res.data.token, res.data.phone);
   }
 
+  // Why "Send code" is disabled, shown under the button.
+  const phoneValid = normalizePhone(phone) !== null;
+  const sendBlockedReason = !hydrated
+    ? "Loading the form… If this doesn't go away, reload the page."
+    : busy
+      ? null
+      : phone.trim() === ""
+        ? "Enter your mobile number to get a code."
+        : !phoneValid
+          ? "Enter a 10-digit Indian mobile number, or + and the country code for other countries."
+          : null;
+
   return (
     <div className="relative space-y-4">
       {honeypot}
@@ -87,9 +110,21 @@ export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Prop
             error={phoneError}
           />
           {error && <Notice tone="error">{error}</Notice>}
-          <Button type="submit" disabled={busy || phone.trim() === ""} className="w-full sm:w-auto">
-            {busy ? "Sending…" : "Send code"}
-          </Button>
+          <div>
+            <Button
+              type="submit"
+              disabled={busy || sendBlockedReason !== null}
+              aria-describedby={sendBlockedReason ? "otp_send_reason" : undefined}
+              className="w-full sm:w-auto"
+            >
+              {busy ? "Sending…" : "Send code"}
+            </Button>
+            {sendBlockedReason && (
+              <p id="otp_send_reason" data-send-hint className="mt-2 text-xs text-neutral-500">
+                {sendBlockedReason}
+              </p>
+            )}
+          </div>
         </form>
       ) : (
         <form

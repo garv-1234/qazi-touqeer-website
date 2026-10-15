@@ -1,7 +1,7 @@
 import "server-only";
 import { NextResponse } from "next/server";
 import type { z } from "zod";
-import { fieldErrors, type BotFields } from "@/lib/validation";
+import { BOT_MIN_FILL_MS, fieldErrors, type BotFields } from "@/lib/validation";
 import { ipHash } from "./crypto";
 
 export type ApiErrorBody = {
@@ -48,14 +48,11 @@ export function clientIp(req: Request): string {
 
 export const clientIpHash = (req: Request) => ipHash(clientIp(req));
 
-/** Minimum time a human takes to fill the step before the request (ms). */
-const MIN_FILL_MS = 3000;
-
 /** Honeypot + time trap. True means "looks like a bot". */
 export function failsBotCheck(bot: BotFields): boolean {
   if (bot.website) return true;
   const elapsed = Date.now() - bot.started_at;
-  return elapsed < MIN_FILL_MS || elapsed > 24 * 60 * 60 * 1000;
+  return elapsed < BOT_MIN_FILL_MS || elapsed > 24 * 60 * 60 * 1000;
 }
 
 export const botRejected = () =>

@@ -69,6 +69,9 @@ export const commonSchema = z.object({
   consent_messages: z.literal(true, "Please agree to receive booking updates"),
 });
 
+/** Minimum time between a form appearing and its first request (bot time trap). */
+export const BOT_MIN_FILL_MS = 3000;
+
 /** Bot check sent with every public form (honeypot + time trap). */
 export const botSchema = z.object({
   website: z.string().max(500).optional(), // must be empty; checked by the server's bot check, not here

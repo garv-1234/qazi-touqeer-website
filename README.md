@@ -41,6 +41,9 @@ npm run dev                  # http://localhost:3000
 ```
 
 In development there is no SMS: the OTP code appears on screen and in the server console.
+To test on a phone, open the "Network" URL that `npm run dev` prints (same Wi-Fi). Private
+LAN addresses (192.168.x.x, 10.x.x.x) are allowed in `next.config.ts`; add any other host,
+such as a tunnel, to `DEV_ALLOWED_ORIGINS` in `.env.local` (comma-separated).
 To try a fan meetup, insert a row into `public.events` with `status = 'published'`
 and a future `starts_at` (the admin screen for events comes in step 3).
 
