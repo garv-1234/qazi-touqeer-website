@@ -1,36 +1,69 @@
-This is a [Next.js](https://nextjs.org) project bootstrapped with [`create-next-app`](https://nextjs.org/docs/app/api-reference/cli/create-next-app).
+# Qazi Touqeer — Official Website
 
-## Getting Started
+Booking website for podcast, fan meetup and event requests, with an admin
+dashboard for the CodeAssure team. Built with Next.js, TypeScript, Tailwind CSS
+and Supabase. The Phase 1 spec is the "Qazi Touqeer Website — Phase 1 PRD" doc.
 
-First, run the development server:
+## Status
+
+| Step | Scope | State |
+| --- | --- | --- |
+| 1. Foundation | Project, database schema, security rules, status rules | Done (database tested) |
+| 2. Booking engine | OTP, booking creation, forms, Track My Booking | Next |
+| 3. Admin | Login, roles, pipeline, actions, settings | — |
+| 4. Payments and messages | Manual payment flow, email, SMS, WhatsApp | — |
+| 5. Frontend design | Full visual design and content | — |
+| 6. QA and launch | Tests, production deploy | — |
+
+## One-time setup
+
+### 1. Supabase
+
+1. Create a project at supabase.com (region: Mumbai).
+2. Open **SQL Editor → New query**, paste the whole of
+   `supabase/migrations/20261015000000_init.sql` and click **Run**.
+   It should finish with "Success. No rows returned".
+3. Create the first staff login: **Authentication → Users → Add user**
+   (email + password, tick "Auto confirm"). Copy the new user's ID, then run:
+
+   ```sql
+   insert into public.staff_profiles (user_id, full_name, email, role)
+   values ('PASTE-USER-ID', 'Your Name', 'you@codeassure.in', 'super_admin');
+   ```
+
+### 2. Local development
 
 ```bash
-npm run dev
-# or
-yarn dev
-# or
-pnpm dev
-# or
-bun dev
+cp .env.example .env.local   # fill in the Supabase URL and keys
+npm install
+npm run dev                  # http://localhost:3000
 ```
 
-Open [http://localhost:3000](http://localhost:3000) with your browser to see the result.
+### 3. Checks
 
-You can start editing the page by modifying `app/page.tsx`. The page auto-updates as you edit the file.
+```bash
+npm run test:db     # database rules against an in-memory Postgres (no Supabase needed)
+npm run typecheck
+npm run lint
+npm run build
+```
 
-This project uses [`next/font`](https://nextjs.org/docs/app/building-your-application/optimizing/fonts) to automatically optimize and load [Geist](https://vercel.com/font), a new font family for Vercel.
+## Database rules (enforced in Postgres, not only in code)
 
-## Learn More
+- Every table has row-level security. Visitors never query tables directly;
+  public actions go through server routes using the service role.
+- Status moves are checked by a trigger; every move is written to
+  `booking_status_history` with who made it.
+- Meetup seats are counted under a row lock, so the last seat can't be sold twice.
+- One open request per phone number per category.
+- A payment reference (UTR) can back only one live payment.
 
-To learn more about Next.js, take a look at the following resources:
+## Project layout
 
-- [Next.js Documentation](https://nextjs.org/docs) - learn about Next.js features and API.
-- [Learn Next.js](https://nextjs.org/learn) - an interactive Next.js tutorial.
-
-You can check out [the Next.js GitHub repository](https://github.com/vercel/next.js) - your feedback and contributions are welcome!
-
-## Deploy on Vercel
-
-The easiest way to deploy your Next.js app is to use the [Vercel Platform](https://vercel.com/new?utm_medium=default-template&filter=next.js&utm_source=create-next-app&utm_campaign=create-next-app-readme) from the creators of Next.js.
-
-Check out our [Next.js deployment documentation](https://nextjs.org/docs/app/building-your-application/deploying) for more details.
+```
+src/app/                 pages and API routes
+src/lib/supabase/        Supabase clients (browser, server, service role)
+src/lib/booking/         booking statuses and rules shared by UI and server
+supabase/migrations/     database schema (run in order)
+supabase/tests/          database rule tests
+```
