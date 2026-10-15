@@ -6,9 +6,9 @@ import { PhoneVerify, useHydrated } from "@/components/booking/phone-verify";
 import { useBotCheck } from "@/components/booking/bot-check";
 import { Button } from "@/components/ui";
 import { CATEGORY_INFO } from "@/lib/booking/categories";
-import { formatDayDate, formatIndianDigits } from "@/lib/booking/events";
 import { checkUploadFile, postJson, UPLOAD_MESSAGES, uploadFile } from "@/lib/client/api";
-import { optionLabel, parseBooking } from "@/lib/validation";
+import { parseBooking } from "@/lib/validation";
+import { formatAnswer } from "./display";
 import { Field, fieldId, type FileState } from "./fields";
 import { applyChange, CONSENT_LABELS, detailFieldOrder, errorsByKey, fieldShown, toPayload, type Consents } from "./logic";
 import type { FieldDef, FormConfig, SectionContext, Values } from "./types";
@@ -604,24 +604,9 @@ function reviewRows(config: FormConfig, sectionId: string, values: Values, phone
 }
 
 function displayValue(f: FieldDef, values: Values, phone: string, brief: FileState): string | null {
-  const v = values[f.key];
-  switch (f.kind) {
-    case "verified-phone":
-      return phone;
-    case "file":
-      return brief.status === "done" ? brief.name : null;
-    case "chips":
-      return Array.isArray(v) && v.length ? v.map((x) => optionLabel(f.options, x)).join(", ") : null;
-    case "select":
-    case "radio":
-      return typeof v === "string" && v ? optionLabel(f.options, v) : null;
-    case "date":
-      return typeof v === "string" && v ? formatDayDate(v) : null;
-    case "amount":
-      return typeof v === "string" && v ? `₹${formatIndianDigits(v)}` : null;
-    default:
-      return typeof v === "string" && v.trim() ? v.trim() : null;
-  }
+  if (f.kind === "verified-phone") return phone;
+  if (f.kind === "file") return brief.status === "done" ? brief.name : null;
+  return formatAnswer(f, values[f.key]);
 }
 
 function Success({ category, done }: { category: FormConfig["category"]; done: Done }) {

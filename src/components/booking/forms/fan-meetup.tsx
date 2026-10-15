@@ -6,11 +6,8 @@ import type { FormConfig, SectionContext, Values } from "@/components/booking/wi
 import { BookingWizard } from "@/components/booking/wizard/wizard";
 import { SOCIAL_LINKS } from "@/lib/booking/categories";
 import { formatDateTimeIST, formatRupees, type PublicEvent } from "@/lib/booking/events";
-import { AGE_GROUP_OPTIONS, PARTY_SIZE_OPTIONS } from "@/lib/validation";
 import { yourDetailsSection } from "./common";
-
-const RULES =
-  "I've read the meetup rules: photo ID for everyone, entry closes 15 minutes after start, no gifts or bags beyond a small purse, and entry is refused for misbehaviour.";
+import { MEETUP_RULES, whoIsComingFields } from "./fan-meetup.config";
 
 /** People counted for seats: under-18s come with a guardian, so 2. */
 const peopleFor = (v: Values) => (v.age_group === "minor" ? 2 : v.party_size === "2" ? 2 : 1);
@@ -52,7 +49,7 @@ export function FanMeetupForm({ initialEventId }: { initialEventId?: string }) {
       // A ?event= link preselects its card if it can still be booked.
       initialValues: byId(initialEventId)?.bookings_open ? { event_id: initialEventId } : undefined,
       onMeetupClosed: refresh,
-      extraConsent: { key: "consent_rules", label: RULES },
+      extraConsent: { key: "consent_rules", label: MEETUP_RULES },
       sections: [
         {
           id: "meetup",
@@ -68,28 +65,7 @@ export function FanMeetupForm({ initialEventId }: { initialEventId?: string }) {
         {
           id: "who",
           title: "Who's coming",
-          fields: [
-            { key: "age_group", kind: "radio", label: "Your age", options: AGE_GROUP_OPTIONS },
-            { key: "party_size", kind: "radio", label: "How many people?", help: "Maximum 2 per booking.", options: PARTY_SIZE_OPTIONS },
-            { key: "guest_name", kind: "text", label: "Second person's full name", help: "They must bring photo ID.", maxLength: 80 },
-            {
-              key: "guardian_name",
-              kind: "text",
-              label: "Parent or guardian's full name",
-              help: "They must attend with you and bring photo ID.",
-              maxLength: 80,
-            },
-            { key: "guardian_phone", kind: "phone", label: "Parent or guardian's phone" },
-            {
-              key: "message",
-              kind: "textarea",
-              label: "A message for Qazi",
-              optional: true,
-              help: "Short and sweet — he may read it out!",
-              maxLength: 300,
-              rows: 3,
-            },
-          ],
+          fields: whoIsComingFields,
           render: ({ values }) => <SeatsAndPrice event={byId(values.event_id)} people={peopleFor(values)} />,
           review: (v) => (v.age_group === "minor" ? [["People", "2 (you and your parent or guardian)"]] : []),
         },

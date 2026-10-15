@@ -59,7 +59,8 @@ docs/specs/booking-forms.md          exact fields, keys, rules and messages of t
 supabase/migrations/*_init.sql       schema, functions, triggers, RLS, seed
 supabase/migrations/*_booking_engine.sql  requester-move guard, OTP, submit_payment, reply, events
 supabase/migrations/*_meetup_cutoff.sql    meetups close 24 h before start; published_events.bookings_open
-supabase/tests/db-rules.test.mjs     52 database rule tests (applies every migration in order)
+supabase/migrations/*_admin_core.sql       staff_action() for every admin action, queue_message(), login attempts
+supabase/tests/db-rules.test.mjs     102 database rule tests (applies every migration in order)
 src/lib/supabase/{admin,server,browser}.ts
 src/lib/booking/status.ts            statuses + allowed moves + requester moves (mirror of DB)
 src/lib/booking/{categories,events}.ts  booking copy, next-step text, IST/₹ formatting (shared)
@@ -72,6 +73,10 @@ src/lib/notifications/queue.ts       queues message_log rows ('queued'); step 4 
 src/components/booking/wizard/       3-step form engine: fields, drafts, review, errors, success
 src/components/booking/forms/        per-category field config (podcast, fan-meetup, misc-event)
 src/components/track/                Track My Booking client
+src/app/(site)/                      public pages (header/footer layout); /admin has its own layout
+src/proxy.ts                         /admin: Supabase session refresh, no-index, logged-out -> login
+src/lib/admin/                       auth (12 h session), roles, pipeline + detail loaders, actions (mirror of DB), flags, format
+src/components/admin/                shell, pipeline view, request detail, action dialogs, approvals
 src/app/                             pages and API routes
 ```
 
@@ -81,7 +86,7 @@ src/app/                             pages and API routes
 | --- | --- | --- | --- |
 | 1. Foundation | 15–16 Oct | Next.js, schema, RLS, status trigger, seat locking, tests | **Done** |
 | 2. Booking engine | 17–19 Oct | OTP send/verify, `/api/bookings`, uploads, 3 basic forms, Track My Booking | **Done** |
-| 3. Admin | 20–22 Oct | Staff login, roles, pipeline, request detail, actions, events, settings, audit | **Next** |
+| 3. Admin | 20–22 Oct | 3a: login, roles, pipeline, request detail, all actions, approvals (**done**). 3b: events, settings, staff, audit log, CSV export | **3b next** |
 | 4. Payments + messages | 23–25 Oct | Manual payment flow, email, SMS OTP, WhatsApp templates, cron reminders | — |
 | 5. Frontend design | 26–28 Oct | Home, About, Media, Events, FAQ, legal; full design; real content | — |
 | 6. QA + launch | 29–31 Oct | E2E tests, fixes, domain, production keys | — |
@@ -128,3 +133,25 @@ src/app/                             pages and API routes
 - Server errors return a reference (`E-…`) that is also in the server log line.
 - Not built yet: the admin flag for betting/alcohol/tobacco/health-claim requests (step 3),
   and Qazi's real Instagram URL (`SOCIAL_LINKS` in `src/lib/booking/categories.ts`).
+
+### Admin core (step 3a, docs/specs/admin-dashboard.md)
+
+- **Every booking action** goes through `public.staff_action(actor, booking, action, input, expected)`:
+  role check (again, in the DB), stale-page check (`expected` = the `bookings.updated_at` the page
+  loaded; mismatch → `QT409`), the change (status only via `transition_booking`), an `audit_log`
+  row with before/after, and queued messages via `queue_message()` — all in one transaction.
+  Errors: `QT403` forbidden, `QT404` not found, `QT409` stale, `QT422` rule (message is user-facing).
+  Route: `POST /api/admin/bookings/[code]/action`. Button rules mirror it in `src/lib/admin/actions.ts`.
+- **Sessions:** Supabase Auth + a signed `qt_staff_since` cookie (12 h, `src/lib/admin/session.ts`).
+  `requireStaffPage()` / `requireStaffApi()` check user, cookie age and `staff_profiles.active` on
+  every request; ended sessions go through `/api/admin/logout?reason=…` to sign out.
+- **Reads** use the staff's own session (RLS); staff names come from the service-role directory.
+  Category managers: phones masked in lists, payments panel = amount due only (UTRs hidden in History).
+  Client approver: phones and emails masked everywhere.
+- **Messages** are `message_log` rows with `payload` (template variables) and `audience`
+  (`requester` / `team`). New templates for step 4: `deadline_extended`, `seat_available`,
+  `team_client_signoff`, `team_client_decision`, `team_booking_cancelled`.
+- Events, Settings, Staff and Audit pages are placeholders with role checks (step 3b).
+  Until Settings exists, payment details are edited in the `settings` table (`payment_details`).
+- Confirmed bookings stay in the Confirmed column after the event date (so they can be marked
+  completed); the spec's "event in the future" wording isn't applied there.

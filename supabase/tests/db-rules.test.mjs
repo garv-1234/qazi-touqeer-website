@@ -190,5 +190,150 @@ ok('published_events marks under-24h meetups as closed and others open',
 await throws('anon cannot call issue_otp', () => as('anon', null, `select public.issue_otp('a', 'submit', 'b')`), 'permission denied');
 await throws('anon cannot call submit_payment', () => as('anon', null, `select public.submit_payment(gen_random_uuid(), 'upi', 1, 'X12345', current_date)`), 'permission denied');
 
+// =====================================================================
+// 14. Admin core (step 3a): staff_action, queue_message, login attempts
+// =====================================================================
+const sa = '33333333-3333-3333-3333-333333333333', ca = '44444444-4444-4444-4444-444444444444',
+  cmp = '55555555-5555-5555-5555-555555555555', gone = '66666666-6666-6666-6666-666666666666';
+await db.query(`insert into auth.users values ($1),($2),($3),($4)`, [sa, ca, cmp, gone]);
+await db.query(`insert into public.staff_profiles (user_id, full_name, email, role, categories, active) values
+  ($1,'Super','sa@x.com','super_admin','{}',true), ($2,'Client','ca@x.com','client_approver','{}',true),
+  ($3,'Pod Coord','p@x.com','category_manager','{podcast}',true), ($4,'Gone','g@x.com','admin','{}',false)`, [sa, ca, cmp, gone]);
+
+const ver = async (id) => (await db.query(`select updated_at from public.bookings where id=$1`, [id])).rows[0].updated_at;
+const act = async (actor, id, action, input = {}, expected) =>
+  (await db.query(`select public.staff_action($1, $2, $3, $4::jsonb, $5) r`,
+    [actor, id, action, JSON.stringify(input), expected === undefined ? await ver(id) : expected])).rows[0].r;
+const statusOf = async (id) => (await db.query(`select status from public.bookings where id=$1`, [id])).rows[0].status;
+const queued = async (id, template) => (await db.query(`select count(*)::int n from public.message_log where booking_id=$1 and template=$2 and status='queued'`, [id, template])).rows[0].n;
+const inH = (h) => new Date(Date.now() + h * 3600e3).toISOString();
+
+await db.query(`update public.settings set value = value || '{"upi_id": "", "account_number": ""}'::jsonb where key='payment_details'`);
+const j = await create({ category: 'podcast', phone: '+919800000041', budget: '80000' });
+
+// Access
+await throws('inactive staff refused', () => act(gone, j.id, 'start_review'), "doesn't have access");
+await throws('client approver cannot start a review', () => act(ca, j.id, 'start_review'), "role can't do this");
+await throws('fan meetup manager gets "not found" for a podcast booking', () => act(mgr, j.id, 'start_review'), 'Request not found');
+await throws('stale page refused (wrong version)', () => act(adm, j.id, 'start_review', {}, '2000-01-01T00:00:00Z'), 'changed since you opened it');
+await throws('missing version refused', () => act(adm, j.id, 'start_review', {}, null), 'changed since you opened it');
+await throws('unknown action refused', () => act(adm, j.id, 'teleport'), 'Unknown action');
+
+// Journey: review -> info -> reply -> flag -> client -> approve -> pay -> confirm
+await act(cmp, j.id, 'start_review');
+const jr = (await db.query(`select status, owner_id from public.bookings where id=$1`, [j.id])).rows[0];
+ok('start_review: in review, owner set to the reviewer', jr.status === 'in_review' && jr.owner_id === cmp);
+await throws('request_info needs 10+ characters', () => act(cmp, j.id, 'request_info', { question: 'short' }), '10 to 1,000');
+await act(cmp, j.id, 'request_info', { question: 'Can you share your last three episodes?' });
+const note = (await db.query(`select internal, author_type from public.booking_notes where booking_id=$1 order by created_at desc limit 1`, [j.id])).rows[0];
+ok('request_info: info requested, visible staff note, message queued',
+  (await statusOf(j.id)) === 'info_requested' && note.internal === false && note.author_type === 'staff' && (await queued(j.id, 'info_requested')) === 2);
+await db.query(`select public.requester_reply($1, 'Here they are: …')`, [j.id]);
+await act(cmp, j.id, 'flag_client', { note: 'Big show, please confirm' });
+ok('flag_client: needs sign-off, client approver alerted',
+  (await db.query(`select needs_client_approval n, client_note c from public.bookings where id=$1`, [j.id])).rows[0].n === true &&
+  (await db.query(`select count(*)::int n from public.message_log where booking_id=$1 and template='team_client_signoff' and recipient='ca@x.com'`, [j.id])).rows[0].n === 1);
+const goodApprove = { advance_amount: 40000, payment_deadline: inH(24) };
+await throws('approve blocked while client sign-off pending', () => act(adm, j.id, 'approve', goodApprove), 'Waiting for client sign-off.');
+await throws('admin cannot record the client decision', () => act(adm, j.id, 'client_decide', { decision: 'approved' }), 'Only the client approver');
+await act(ca, j.id, 'client_decide', { decision: 'approved', comment: 'Go ahead' });
+ok('client_decide: decision saved, owner alerted', (await db.query(`select client_decision d from public.bookings where id=$1`, [j.id])).rows[0].d === 'approved' &&
+  (await db.query(`select count(*)::int n from public.message_log where booking_id=$1 and template='team_client_decision' and recipient='p@x.com'`, [j.id])).rows[0].n === 1);
+await throws('approve blocked until payment details are saved', () => act(adm, j.id, 'approve', goodApprove), 'Add payment details in Settings first.');
+await db.query(`update public.settings set value = value || '{"upi_id": "qazi@okbank"}'::jsonb where key='payment_details'`);
+await throws('approve refuses a deadline under 1 hour', () => act(adm, j.id, 'approve', { advance_amount: 40000, payment_deadline: inH(0.5) }), 'at least 1 hour');
+await throws('approve refuses a deadline over 14 days', () => act(adm, j.id, 'approve', { advance_amount: 40000, payment_deadline: inH(15 * 24) }), 'at most 14 days');
+await act(cmp, j.id, 'approve', goodApprove);
+ok('approve: payment pending with amount and deadline, payment details queued',
+  (await statusOf(j.id)) === 'payment_pending' && (await queued(j.id, 'payment_pending')) === 2 &&
+  Number((await db.query(`select payload->>'amount' a from public.message_log where booking_id=$1 and template='payment_pending' limit 1`, [j.id])).rows[0].a) === 40000);
+
+// Payments
+await db.query(`select public.submit_payment($1, 'upi', 39000, '700000000001', current_date)`, [j.id]);
+await throws('category manager cannot mark paid', () => act(cmp, j.id, 'mark_paid', { found_utr: true, amount_ok: true }), 'Only a Super admin or Admin');
+await throws('mark paid needs both ticks', () => act(adm, j.id, 'mark_paid', { found_utr: true }), 'Tick both boxes');
+await throws('mark paid refused when the amount is short', () => act(adm, j.id, 'mark_paid', { found_utr: true, amount_ok: true }), 'Amount is short');
+await throws('reject payment needs a message for "Other"', () => act(adm, j.id, 'reject_payment', { reason: 'other' }), 'Add a message');
+await act(adm, j.id, 'reject_payment', { reason: 'amount_mismatch' });
+ok('reject payment: back to payment pending, payment rejected with reason, requester told',
+  (await statusOf(j.id)) === 'payment_pending' && (await queued(j.id, 'payment_rejected')) === 2 &&
+  (await db.query(`select status, reject_reason from public.payments where utr='700000000001'`)).rows[0].status === 'rejected');
+await act(cmp, j.id, 'extend_deadline', { payment_deadline: inH(48) });
+ok('extend deadline: new deadline, marked extended', (await db.query(`select deadline_extended e from public.bookings where id=$1`, [j.id])).rows[0].e === true);
+await throws('extend deadline works only once', () => act(cmp, j.id, 'extend_deadline', { payment_deadline: inH(60) }), 'already been extended');
+await db.query(`select public.submit_payment($1, 'upi', 40000, '700000000002', current_date)`, [j.id]);
+await act(adm, j.id, 'mark_paid', { found_utr: true, amount_ok: true });
+ok('mark paid: confirmed, payment verified by the admin, confirmation queued',
+  (await statusOf(j.id)) === 'confirmed' && (await queued(j.id, 'confirmed')) === 2 &&
+  (await db.query(`select verified_by from public.payments where utr='700000000002'`)).rows[0].verified_by === adm);
+const hist = (await db.query(`select to_status, actor_type, actor_id from public.booking_status_history where booking_id=$1 order by id`, [j.id])).rows;
+ok('history: every move with the right actor', hist.map((h) => `${h.to_status}:${h.actor_type}`).join(',') ===
+  'submitted:requester,in_review:staff,info_requested:staff,in_review:requester,payment_pending:staff,payment_submitted:requester,payment_pending:staff,payment_submitted:requester,confirmed:staff'
+  && hist.find((h) => h.to_status === 'confirmed').actor_id === adm, JSON.stringify(hist));
+const aud = (await db.query(`select action, actor_id, before->>'status' b, after->>'status' a from public.audit_log where entity='booking' and entity_id=$1 order by id`, [j.booking_code])).rows;
+ok('audit log: one row per action with before/after', aud.map((r) => r.action).join(',') ===
+  'booking.start_review,booking.request_info,booking.flag_client,booking.client_decide,booking.approve,booking.reject_payment,booking.extend_deadline,booking.mark_paid'
+  && aud.at(-1).b === 'payment_submitted' && aud.at(-1).a === 'confirmed' && aud.at(-1).actor_id === adm, JSON.stringify(aud));
+ok('a failed action leaves no audit row', !aud.some((r) => r.action === 'booking.teleport'));
+await throws('category manager cannot cancel after payment', () => act(cmp, j.id, 'cancel', { reason: 'Changed plans' }), 'after payment');
+await throws('cancelling a paid booking needs a refund decision', () => act(adm, j.id, 'cancel', { reason: 'Changed plans' }), 'refund decision');
+await act(adm, j.id, 'cancel', { reason: 'Show cancelled', refund: 'partial', refund_amount: 20000 });
+ok('cancel after payment: cancelled with the refund decision recorded',
+  JSON.stringify((await db.query(`select status, refund_decision, refund_amount::int from public.bookings where id=$1`, [j.id])).rows[0]) ===
+  JSON.stringify({ status: 'cancelled', refund_decision: 'partial', refund_amount: 20000 }));
+
+// Overdue -> release, waitlist -> offer seat (meetup)
+const ev2 = (await db.query(`insert into public.events (title, city, venue, starts_at, capacity, ticket_price, status)
+  values ('Pune meetup','Pune','Hall', now() + interval '10 days', 1, 500, 'published') returning id`)).rows[0].id;
+const h1 = await create({ category: 'fan_meetup', event_id: ev2, phone: '+919800000042' });
+await act(mgr, h1.id, 'start_review');
+await act(mgr, h1.id, 'approve', { advance_amount: 500, payment_deadline: inH(2) });
+const w1 = await create({ category: 'fan_meetup', event_id: ev2, phone: '+919800000043' });
+ok('meetup full: next request is waitlisted', w1.status === 'waitlisted');
+await throws('offer seat refused while the meetup is full', () => act(mgr, w1.id, 'offer_seat'), 'No seats left for this meetup');
+await throws('release refused before the deadline', () => act(mgr, h1.id, 'release'), 'Only an overdue booking');
+await db.query(`update public.bookings set payment_deadline = now() - interval '1 minute' where id=$1`, [h1.id]);
+await act(mgr, h1.id, 'release');
+ok('release: expired, seat freed, requester told', (await statusOf(h1.id)) === 'expired' && (await queued(h1.id, 'expired')) === 2 &&
+  (await db.query(`select public.event_seats_left($1) n`, [ev2])).rows[0].n === 1);
+await act(mgr, w1.id, 'offer_seat');
+ok('offer seat: waitlisted -> submitted, seat-available queued', (await statusOf(w1.id)) === 'submitted' && (await queued(w1.id, 'seat_available')) === 2);
+await throws('decline "Other" needs a message', () => act(mgr, w1.id, 'decline', { reason: 'other' }), 'Add a message');
+await act(mgr, w1.id, 'decline', { reason: 'dates_unavailable', message: 'Sorry!' });
+ok('decline: declined with the reason sentence queued', (await statusOf(w1.id)) === 'declined' &&
+  (await db.query(`select payload->>'reason_text' t from public.message_log where booking_id=$1 and template='declined' limit 1`, [w1.id])).rows[0].t === "Qazi isn't available on these dates.");
+
+// Assign, complete, notes
+const k = await create({ category: 'misc_event', phone: '+919800000044', budget: '90000' });
+await throws('assign refuses staff who cannot see the category', () => act(adm, k.id, 'assign', { owner_id: mgr }), 'can see this category');
+await throws('assign refuses the client approver', () => act(adm, k.id, 'assign', { owner_id: ca }), 'can see this category');
+await act(adm, k.id, 'assign', { owner_id: sa });
+ok('assign: owner set', (await db.query(`select owner_id from public.bookings where id=$1`, [k.id])).rows[0].owner_id === sa);
+await act(ca, k.id, 'add_note', { body: 'Client: keep me posted' });
+ok('client approver can add an internal note', (await db.query(`select internal from public.booking_notes where booking_id=$1`, [k.id])).rows[0].internal === true);
+await act(adm, k.id, 'start_review');
+await act(adm, k.id, 'approve', { advance_amount: 45000, payment_deadline: inH(24) });
+await db.query(`select public.submit_payment($1, 'bank_transfer', 45000, 'HDFC0000000000012', current_date)`, [k.id]);
+await act(adm, k.id, 'mark_paid', { found_utr: true, amount_ok: true });
+await db.query(`update public.bookings set preferred_date = current_date + 5 where id=$1`, [k.id]);
+await throws('complete refused before the event date', () => act(adm, k.id, 'complete'), 'after the event date');
+await db.query(`update public.bookings set preferred_date = current_date - 2 where id=$1`, [k.id]);
+await act(adm, k.id, 'complete');
+ok('complete after the event date', (await statusOf(k.id)) === 'completed');
+
+// Queue channels and login attempts
+await db.query(`update public.settings set value = '{"whatsapp": true, "email": false, "sms": true}'::jsonb where key='notifications'`);
+const nq = (await db.query(`select public.queue_message($1, 'test_tpl') n`, [k.id])).rows[0].n;
+const chans = (await db.query(`select channel from public.message_log where booking_id=$1 and template='test_tpl'`, [k.id])).rows.map((r) => r.channel);
+ok('queue_message: WhatsApp replaces SMS when on; email off respected', nq === 1 && chans.join() === 'whatsapp');
+await db.query(`update public.settings set value = '{"whatsapp": false, "email": true, "sms": true}'::jsonb where key='notifications'`);
+for (let i = 0; i < 4; i++) await db.query(`select public.record_staff_login('Who@X.com', false)`);
+ok('4 failed logins: not locked yet', (await db.query(`select public.staff_login_locked('who@x.com') l`)).rows[0].l === false);
+await db.query(`select public.record_staff_login('who@x.com', false)`);
+ok('5 failed logins in 15 minutes: locked', (await db.query(`select public.staff_login_locked(' WHO@x.com ') l`)).rows[0].l === true);
+ok('failed logins are audited', (await db.query(`select count(*)::int n from public.audit_log where action='staff.login_failed' and entity_id='who@x.com'`)).rows[0].n === 5);
+await throws('anon cannot call staff_action', () => as('anon', null, `select public.staff_action(gen_random_uuid(), gen_random_uuid(), 'add_note')`), 'permission denied');
+await throws('staff cannot call staff_action directly', () => as('authenticated', adm, `select public.staff_action('${adm}', '${k.id}', 'add_note', '{"body":"x"}')`), 'permission denied');
+
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
