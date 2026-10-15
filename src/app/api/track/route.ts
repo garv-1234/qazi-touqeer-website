@@ -11,7 +11,6 @@ export async function POST(req: Request) {
     if (response) return response;
     return NextResponse.json({ booking: await buildTrackView(ctx.db, ctx.booking) });
   } catch (e) {
-    console.error("track", e);
-    return serverError();
+    return serverError("track", e);
   }
 }

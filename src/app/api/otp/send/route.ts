@@ -40,10 +40,10 @@ export async function POST(req: Request) {
     });
     if (error) throw error;
     if (result === "phone_limit") {
-      return apiError(429, "rate_limited", "Too many codes were sent to this number. Please try again in an hour.");
+      return apiError(429, "rate_limited", "Too many codes requested. Please try again in an hour.");
     }
     if (result === "ip_limit") {
-      return apiError(429, "rate_limited", "Too many codes were requested from this network. Please try again later.");
+      return apiError(429, "rate_limited", "Too many codes requested. Please try again in an hour.");
     }
 
     const log = { channel: "sms", template: `otp_${data.purpose}`, recipient: data.phone, attempts: 1 };
@@ -58,7 +58,6 @@ export async function POST(req: Request) {
     // In local development there is no SMS: show the code on screen.
     return NextResponse.json(isDevSms() ? { ...sent, dev_code: code } : sent);
   } catch (e) {
-    console.error("otp/send", e);
-    return serverError();
+    return serverError("otp/send", e);
   }
 }

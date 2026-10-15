@@ -178,6 +178,15 @@ ok('reply saves a visible note and returns to in_review', dr.status === 'in_revi
 await db.query(`insert into public.events (title, city, venue, starts_at, capacity, status) values ('Draft','Pune','X', now() + interval '5 days', 10, 'draft')`);
 const pe = (await db.query(`select * from public.published_events()`)).rows;
 ok('published_events lists only published future events with seats left', pe.length === 1 && pe[0].seats_left === 2);
+
+// 13. meetup cut-off: no requests within 24 hours of the start (booking forms spec)
+const soon = (await db.query(`insert into public.events (title, city, venue, starts_at, capacity, status)
+  values ('Soon','Pune','Y', now() + interval '20 hours', 10, 'published') returning id`)).rows[0].id;
+await throws('meetup starting in under 24 hours refused', () => create({ category: 'fan_meetup', event_id: soon, phone: '+919800000031' }), 'not open for booking');
+const pe2 = (await db.query(`select id, bookings_open from public.published_events()`)).rows;
+ok('published_events marks under-24h meetups as closed and others open',
+  pe2.find((r) => r.id === soon)?.bookings_open === false && pe2.find((r) => r.id === ev)?.bookings_open === true);
+
 await throws('anon cannot call issue_otp', () => as('anon', null, `select public.issue_otp('a', 'submit', 'b')`), 'permission denied');
 await throws('anon cannot call submit_payment', () => as('anon', null, `select public.submit_payment(gen_random_uuid(), 'upi', 1, 'X12345', current_date)`), 'permission denied');
 

@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { botSchema, bookingCodeSchema, optionalText, phoneSchema, text, todayIST } from "./common";
+import { botSchema, bookingCodeSchema, optional, phoneSchema, textArea, todayIST } from "./common";
 
 export const OTP_PURPOSES = ["submit", "track"] as const;
 export type OtpPurpose = (typeof OTP_PURPOSES)[number];
@@ -69,9 +69,9 @@ export const paymentSubmitSchema = trackRequestSchema
   });
 
 export const cancelRequestSchema = trackRequestSchema.extend({
-  reason: optionalText(500),
+  reason: optional(textArea(0, 500, "Keep this under 500 characters.", "Keep this under 500 characters.")),
 });
 
 export const replyRequestSchema = trackRequestSchema.extend({
-  message: text(2, 3000, "Write your reply"),
+  message: textArea(2, 3000, "Write your reply", "Keep this under 3,000 characters."),
 });

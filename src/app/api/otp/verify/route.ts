@@ -27,18 +27,20 @@ export async function POST(req: Request) {
           expires_in: OTP_TOKEN_TTL_SECONDS,
         });
       case "invalid":
-        return apiError(400, "otp_invalid", `That code isn't right. ${r.attempts_left} attempt(s) left.`, {
-          fields: { code: "Wrong code" },
-        });
+        return apiError(
+          400,
+          "otp_invalid",
+          `That code isn't right. ${r.attempts_left} ${r.attempts_left === 1 ? "try" : "tries"} left.`,
+          { attempts_left: r.attempts_left },
+        );
       case "expired":
         return apiError(400, "otp_expired", "This code has expired. Please request a new one.");
       case "too_many":
-        return apiError(429, "otp_locked", "Too many wrong attempts. Please request a new code.");
+        return apiError(429, "otp_locked", "Please request a new code.");
       default:
-        return apiError(400, "otp_missing", "Please request a code first.");
+        return apiError(400, "otp_missing", "Please request a new code.");
     }
   } catch (e) {
-    console.error("otp/verify", e);
-    return serverError();
+    return serverError("otp/verify", e);
   }
 }

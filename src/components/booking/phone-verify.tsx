@@ -1,14 +1,14 @@
 "use client";
 
 import { useState, useSyncExternalStore } from "react";
-import { Button, Notice, TextField } from "@/components/ui";
+import { Button, TextField } from "@/components/ui";
 import { postJson } from "@/lib/client/api";
 import { normalizePhone, type OtpPurpose } from "@/lib/validation";
 import { useBotCheck } from "./bot-check";
 
 const noopSubscribe = () => () => {};
 /** False in the server HTML and until React hydrates, then true. */
-const useHydrated = () =>
+export const useHydrated = () =>
   useSyncExternalStore(
     noopSubscribe,
     () => true,
@@ -21,26 +21,34 @@ type Props = {
   bookingCode?: string;
   /** Return an error message to stop the send (e.g. missing Booking ID). */
   validate?: () => string | null;
-  onVerified: (token: string, phone: string) => void;
+  /** Number to start with (e.g. from a saved draft). */
+  initialPhone?: string;
+  /** Re-verifying a known number: show it read-only. */
+  lockPhone?: boolean;
+  /** Called with the token and its lifetime in seconds. */
+  onVerified: (token: string, phone: string, expiresIn: number) => void;
 };
 
 /** FR-B5: verify the WhatsApp number with a 6-digit code. */
-export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Props) {
+export function PhoneVerify({ purpose, bookingCode, validate, initialPhone, lockPhone, onVerified }: Props) {
   const { honeypot, bot, waitForMinFill } = useBotCheck();
   const hydrated = useHydrated();
-  const [phone, setPhone] = useState("");
+  const [phone, setPhone] = useState(initialPhone ?? "");
   const [sentTo, setSentTo] = useState<string | null>(null);
   const [code, setCode] = useState("");
   const [devCode, setDevCode] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const [sendError, setSendError] = useState<string | null>(null);
+  const [sendLocked, setSendLocked] = useState(false);
+  const [codeError, setCodeError] = useState<string | null>(null);
+  const [codeLocked, setCodeLocked] = useState(false);
   const [phoneError, setPhoneError] = useState<string>();
 
   async function send() {
-    setError(null);
+    setSendError(null);
     setPhoneError(undefined);
     const problem = validate?.();
-    if (problem) return setError(problem);
+    if (problem) return setSendError(problem);
     const normalized = normalizePhone(phone);
     if (!normalized) return setPhoneError("Enter a valid mobile number (add the country code if not Indian)");
 
@@ -53,31 +61,43 @@ export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Prop
       bot: bot(),
     });
     setBusy(false);
-    if (!res.ok) return setError(res.error.message);
+    if (!res.ok) {
+      setSendError(res.error.message);
+      if (res.status === 429) setSendLocked(true);
+      return;
+    }
     setSentTo(normalized);
     setCode("");
+    setCodeError(null);
+    setCodeLocked(false);
     setDevCode(res.data.dev_code ?? null);
   }
 
   async function verify() {
     if (!sentTo) return;
-    setError(null);
+    setCodeError(null);
     setBusy(true);
-    const res = await postJson<{ token: string; phone: string }>("/api/otp/verify", {
+    const res = await postJson<{ token: string; phone: string; expires_in: number }>("/api/otp/verify", {
       phone: sentTo,
       purpose,
       code,
     });
     setBusy(false);
-    if (!res.ok) return setError(res.error.message);
-    onVerified(res.data.token, res.data.phone);
+    if (!res.ok) {
+      setCodeError(res.error.message);
+      if (res.error.error === "otp_locked" || res.error.error === "otp_expired" || res.error.error === "otp_missing") {
+        setCodeLocked(true);
+      }
+      return;
+    }
+    onVerified(res.data.token, res.data.phone, res.data.expires_in);
   }
 
   // Why "Send code" is disabled, shown under the button.
   const phoneValid = normalizePhone(phone) !== null;
   const sendBlockedReason = !hydrated
     ? "Loading the form… If this doesn't go away, reload the page."
-    : busy
+    : busy || sendLocked
       ? null
       : phone.trim() === ""
         ? "Enter your mobile number to get a code."
@@ -103,26 +123,32 @@ export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Prop
             inputMode="tel"
             autoComplete="tel"
             placeholder="98765 43210"
-            hint="Indian numbers need no code. Outside India, start with + and your country code."
+            hint="We'll send booking updates here."
             required
+            readOnly={lockPhone}
             value={phone}
             onChange={(e) => setPhone(e.target.value)}
             error={phoneError}
           />
-          {error && <Notice tone="error">{error}</Notice>}
           <div>
             <Button
               type="submit"
-              disabled={busy || sendBlockedReason !== null}
-              aria-describedby={sendBlockedReason ? "otp_send_reason" : undefined}
+              disabled={busy || sendLocked || sendBlockedReason !== null}
+              aria-describedby={sendError ? "otp_send_error" : sendBlockedReason ? "otp_send_reason" : undefined}
               className="w-full sm:w-auto"
             >
               {busy ? "Sending…" : "Send code"}
             </Button>
-            {sendBlockedReason && (
-              <p id="otp_send_reason" data-send-hint className="mt-2 text-xs text-neutral-500">
-                {sendBlockedReason}
+            {sendError ? (
+              <p id="otp_send_error" role="alert" className="mt-2 text-sm text-red-600">
+                {sendError}
               </p>
+            ) : (
+              sendBlockedReason && (
+                <p id="otp_send_reason" data-send-hint className="mt-2 text-xs text-neutral-500">
+                  {sendBlockedReason}
+                </p>
+              )
             )}
           </div>
         </form>
@@ -140,7 +166,11 @@ export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Prop
               : `We've sent a 6-digit code to ${sentTo}.`}{" "}
             It&apos;s valid for 10 minutes.
           </p>
-          {devCode && <Notice>Development mode, no SMS sent. Your code is {devCode}.</Notice>}
+          {devCode && (
+            <p className="rounded-lg border border-neutral-200 bg-neutral-50 px-4 py-3 text-sm text-neutral-700">
+              Development mode, no SMS sent. Your code is <strong className="font-mono">{devCode}</strong>.
+            </p>
+          )}
           <TextField
             label="Code"
             name="otp_code"
@@ -151,19 +181,26 @@ export function PhoneVerify({ purpose, bookingCode, validate, onVerified }: Prop
             required
             value={code}
             onChange={(e) => setCode(e.target.value.replace(/\D/g, ""))}
+            error={codeError ?? undefined}
           />
-          {error && <Notice tone="error">{error}</Notice>}
           <div className="flex flex-wrap gap-3">
-            <Button type="submit" disabled={busy || code.length !== 6}>
+            <Button type="submit" disabled={busy || codeLocked || code.length !== 6}>
               {busy ? "Checking…" : "Verify"}
             </Button>
-            <Button type="button" variant="secondary" disabled={busy} onClick={() => void send()}>
+            <Button type="button" variant="secondary" disabled={busy || sendLocked} onClick={() => void send()}>
               Resend code
             </Button>
-            <Button type="button" variant="secondary" disabled={busy} onClick={() => setSentTo(null)}>
-              Change number
-            </Button>
+            {!lockPhone && (
+              <Button type="button" variant="secondary" disabled={busy} onClick={() => setSentTo(null)}>
+                Change number
+              </Button>
+            )}
           </div>
+          {sendError && (
+            <p role="alert" className="text-sm text-red-600">
+              {sendError}
+            </p>
+          )}
         </form>
       )}
     </div>

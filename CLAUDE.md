@@ -55,18 +55,22 @@ npm run build
 
 ```
 docs/PRD.md                          Phase 1 spec (requirement IDs FR-W/B/P/N/A, NFR)
+docs/specs/booking-forms.md          exact fields, keys, rules and messages of the 3 booking forms
 supabase/migrations/*_init.sql       schema, functions, triggers, RLS, seed
 supabase/migrations/*_booking_engine.sql  requester-move guard, OTP, submit_payment, reply, events
-supabase/tests/db-rules.test.mjs     50 database rule tests (applies every migration in order)
+supabase/migrations/*_meetup_cutoff.sql    meetups close 24 h before start; published_events.bookings_open
+supabase/tests/db-rules.test.mjs     52 database rule tests (applies every migration in order)
 src/lib/supabase/{admin,server,browser}.ts
 src/lib/booking/status.ts            statuses + allowed moves + requester moves (mirror of DB)
 src/lib/booking/{categories,events}.ts  booking copy, next-step text, IST/₹ formatting (shared)
 src/lib/booking/{server,track-route}.ts server-only: lookup by code+phone, upload checks, Track view
-src/lib/validation/                  Zod schemas shared by forms and API routes
+src/lib/validation/                  Zod schemas shared by forms and API routes (booking.ts = the spec)
+src/lib/validation/options.ts       choice lists: stored value + label, shared with admin later
 src/lib/server/{crypto,http}.ts      hashes, OTP token, body parsing, bot check, IP, PG error mapping
 src/lib/sms/                         SmsProvider interface (dev console provider only for now)
 src/lib/notifications/queue.ts       queues message_log rows ('queued'); step 4 sends them
-src/components/booking/              PhoneVerify, BookingFlow, three category forms
+src/components/booking/wizard/       3-step form engine: fields, drafts, review, errors, success
+src/components/booking/forms/        per-category field config (podcast, fan-meetup, misc-event)
 src/components/track/                Track My Booking client
 src/app/                             pages and API routes
 ```
@@ -111,3 +115,16 @@ src/app/                             pages and API routes
 - Fan meetup format (paid / free / both); who the client approver is and the approval threshold
 - Domain, and who owns the Vercel and Supabase accounts
 - Final content: bio, photos, videos, policies, FAQ
+
+### Booking forms (step 2b, docs/specs/booking-forms.md)
+
+- The spec is the source of truth. Keys in `details` are exactly the spec's keys; `budget`,
+  `event_id` and `party_size` are columns. `details` schemas are strict (unknown keys rejected).
+- "Shown when" rules live once in `SHOWN_WHEN` (`src/lib/validation/booking.ts`): the forms
+  use them to show/hide and clear fields, and the server strips hidden fields before validating
+  and requires shown ones. Change a rule there and both sides follow.
+- `parseBooking(payload, "details" | "send")`: step 2 vs. send (adds the consent boxes).
+- Drafts: `localStorage` key `qt-booking-draft-v1:<category>` (answers + phone only).
+- Server errors return a reference (`E-…`) that is also in the server log line.
+- Not built yet: the admin flag for betting/alcohol/tobacco/health-claim requests (step 3),
+  and Qazi's real Instagram URL (`SOCIAL_LINKS` in `src/lib/booking/categories.ts`).

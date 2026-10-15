@@ -1,4 +1,5 @@
 import "server-only";
+import { randomBytes } from "node:crypto";
 import { NextResponse } from "next/server";
 import type { z } from "zod";
 import { BOT_MIN_FILL_MS, fieldErrors, type BotFields } from "@/lib/validation";
@@ -15,8 +16,20 @@ export function apiError(status: number, error: string, message: string, extra?:
   return NextResponse.json<ApiErrorBody>({ error, message, ...extra }, { status });
 }
 
-export const serverError = () =>
-  apiError(500, "server_error", "Something went wrong on our side. Please try again in a minute.");
+/**
+ * Logs the error with a short reference and returns it to the visitor, so a
+ * support request can be matched to the log line.
+ */
+export function serverError(where: string, error: unknown) {
+  const ref = `E-${Date.now().toString(36).toUpperCase()}-${randomBytes(2).toString("hex").toUpperCase()}`;
+  console.error(`[${ref}] ${where}`, error);
+  return apiError(
+    500,
+    "server_error",
+    "Something went wrong on our side. Your answers are saved. Please try again in a minute.",
+    { ref },
+  );
+}
 
 /** Parses the JSON body with a schema; on failure returns a 400 with field messages. */
 export async function parseBody<S extends z.ZodType>(
@@ -56,7 +69,7 @@ export function failsBotCheck(bot: BotFields): boolean {
 }
 
 export const botRejected = () =>
-  apiError(400, "bot_check", "We couldn't verify this request. Please reload the page and try again.");
+  apiError(400, "bot_check", "Please wait a moment and try again.");
 
 type PgError = { code?: string; message?: string } | null | undefined;
 

@@ -42,7 +42,6 @@ export async function POST(req: Request) {
 
     return NextResponse.json({ bucket: BOOKING_FILES_BUCKET, path: signed.path, upload_token: signed.token });
   } catch (e) {
-    console.error("uploads", e);
-    return serverError();
+    return serverError("uploads", e);
   }
 }

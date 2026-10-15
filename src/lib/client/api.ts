@@ -35,17 +35,32 @@ export async function postJson<T>(url: string, body: unknown): Promise<ApiResult
   }
 }
 
+export const UPLOAD_MESSAGES = {
+  type: "Upload a PDF, JPG, PNG or WEBP file.",
+  size: "This file is over 10 MB.",
+  failed: "Upload failed. Check your connection and try again.",
+  auth: "For your security, please verify your number again.",
+} as const;
+
+export type UploadFailure = keyof typeof UPLOAD_MESSAGES;
+
+/** Type and size check done before any upload starts. */
+export function checkUploadFile(file: File): UploadFailure | null {
+  if (!(UPLOAD_MIME_TYPES as readonly string[]).includes(file.type)) return "type";
+  if (file.size > UPLOAD_MAX_BYTES) return "size";
+  return null;
+}
+
 /** Checks a file, gets a signed upload URL, and uploads straight to private storage. */
 export async function uploadFile(
   file: File,
   kind: UploadKind,
   token: string,
   bookingCode?: string,
-): Promise<{ ok: true; path: string } | { ok: false; message: string }> {
-  if (!(UPLOAD_MIME_TYPES as readonly string[]).includes(file.type)) {
-    return { ok: false, message: "Upload a PDF, JPEG, PNG or WEBP file." };
-  }
-  if (file.size > UPLOAD_MAX_BYTES) return { ok: false, message: "Files must be 10 MB or smaller." };
+): Promise<{ ok: true; path: string } | { ok: false; reason: UploadFailure; message: string }> {
+  const fail = (reason: UploadFailure) => ({ ok: false as const, reason, message: UPLOAD_MESSAGES[reason] });
+  const problem = checkUploadFile(file);
+  if (problem) return fail(problem);
 
   const signed = await postJson<{ bucket: string; path: string; upload_token: string }>("/api/uploads", {
     token,
@@ -54,12 +69,16 @@ export async function uploadFile(
     size_bytes: file.size,
     booking_code: bookingCode,
   });
-  if (!signed.ok) return { ok: false, message: signed.error.message };
+  if (!signed.ok) return fail(signed.error.error === "otp_required" ? "auth" : "failed");
 
-  const { error } = await createClient()
-    .storage.from(signed.data.bucket)
-    .uploadToSignedUrl(signed.data.path, signed.data.upload_token, file, { contentType: file.type });
-  if (error) return { ok: false, message: "The upload failed. Please try again." };
+  try {
+    const { error } = await createClient()
+      .storage.from(signed.data.bucket)
+      .uploadToSignedUrl(signed.data.path, signed.data.upload_token, file, { contentType: file.type });
+    if (error) return fail("failed");
+  } catch {
+    return fail("failed");
+  }
   return { ok: true, path: signed.data.path };
 }
 

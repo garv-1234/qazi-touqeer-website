@@ -5,7 +5,17 @@ export type CategoryCode = "podcast" | "fan_meetup" | "misc_event";
 /** Booking page copy (FR-W3). Placeholder text until final content arrives in step 5. */
 export const CATEGORY_INFO: Record<
   CategoryCode,
-  { label: string; href: string; summary: string; expect: string[]; price: string; response: string }
+  {
+    label: string;
+    href: string;
+    summary: string;
+    expect: string[];
+    price: string;
+    response: string;
+    /** Booking form page title and intro (docs/specs/booking-forms.md). */
+    formTitle: string;
+    formIntro: string;
+  }
 > = {
   podcast: {
     label: "Podcast / Interview",
@@ -14,6 +24,9 @@ export const CATEGORY_INFO: Record<
     expect: ["Tell us about your channel and topic", "We review and reply with availability", "Pay the advance to confirm"],
     price: "On request",
     response: "Within 3 working days",
+    formTitle: "Podcast / Interview",
+    formIntro:
+      "Invite Qazi to your podcast, YouTube show or interview. Tell us about your show and what you'd like to talk about.",
   },
   fan_meetup: {
     label: "Fan Meetup",
@@ -22,6 +35,8 @@ export const CATEGORY_INFO: Record<
     expect: ["Pick a published meetup", "Come alone or with one friend", "Pay the ticket price to confirm your seat"],
     price: "See event price",
     response: "Within 24 hours",
+    formTitle: "Meet Qazi",
+    formIntro: "Pick a meetup near you. Seats are limited, and your seat is confirmed only after payment.",
   },
   misc_event: {
     label: "Miscellaneous Event",
@@ -30,6 +45,9 @@ export const CATEGORY_INFO: Record<
     expect: ["Share your event details and budget", "Upload a brief if you have one", "We review and send terms"],
     price: "On request",
     response: "Within 3 working days",
+    formTitle: "Events and collaborations",
+    formIntro:
+      "Shows, college fests, launches, brand collaborations and private events. Tell us about your event and we'll get back with availability and terms.",
   },
 };
 
@@ -47,3 +65,9 @@ export const NEXT_STEP: Record<BookingStatus, string> = {
   expired: "The payment deadline passed and the slot was released. You're welcome to book again.",
   cancelled: "This booking was cancelled.",
 };
+
+/**
+ * Social links. TODO(content, step 5): replace with Qazi's verified Instagram
+ * profile URL. Until then this points at Instagram's home page.
+ */
+export const SOCIAL_LINKS = { instagram: "https://www.instagram.com/" } as const;

@@ -45,7 +45,6 @@ export async function POST(req: Request) {
     const updated = await findBookingForPhone(db, booking.booking_code, token.phone);
     return NextResponse.json({ booking: await buildTrackView(db, updated!) });
   } catch (e) {
-    console.error("track/payment", e);
-    return serverError();
+    return serverError("track/payment", e);
   }
 }

@@ -1,14 +1,15 @@
 import type { Metadata } from "next";
-import { PodcastForm } from "@/components/booking/podcast-form";
+import { PodcastForm } from "@/components/booking/forms/podcast";
 import { PageIntro } from "@/components/site-chrome";
 import { CATEGORY_INFO } from "@/lib/booking/categories";
 
-export const metadata: Metadata = { title: "Book a podcast or interview" };
+const info = CATEGORY_INFO.podcast;
+export const metadata: Metadata = { title: info.formTitle };
 
 export default function PodcastPage() {
   return (
     <>
-      <PageIntro title={CATEGORY_INFO.podcast.label}>{CATEGORY_INFO.podcast.summary}</PageIntro>
+      <PageIntro title={info.formTitle}>{info.formIntro}</PageIntro>
       <PodcastForm />
     </>
   );

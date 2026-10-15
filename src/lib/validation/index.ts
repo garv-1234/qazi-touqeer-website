@@ -3,6 +3,7 @@
 export * from "./common";
 export * from "./booking";
 export * from "./requests";
+export * from "./options";
 export { normalizePhone, maskPhone } from "./phone";
 
 import type { z } from "zod";

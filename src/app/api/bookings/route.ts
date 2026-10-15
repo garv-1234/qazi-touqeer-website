@@ -1,6 +1,6 @@
 import { NextResponse } from "next/server";
 import { createAdminClient } from "@/lib/supabase/admin";
-import { verifyUpload, type VerifiedUpload } from "@/lib/booking/server";
+import { verifyUpload } from "@/lib/booking/server";
 import { OPEN_STATUSES, type BookingStatus } from "@/lib/booking/status";
 import { queueMessages } from "@/lib/notifications/queue";
 import { verifyOtpToken } from "@/lib/server/crypto";
@@ -14,42 +14,56 @@ import {
   ruleMessage,
   serverError,
 } from "@/lib/server/http";
-import { createBookingRequestSchema, type BookingInput } from "@/lib/validation";
+import { createBookingRequestSchema, fieldErrors, parseBooking, type BookingInput } from "@/lib/validation";
 
 const SUBMISSIONS_PER_IP_PER_HOUR = 10;
+const HOUR_MS = 60 * 60 * 1000;
 
-/** POST /api/bookings — create a booking after OTP (FR-B5..B10). */
+/** POST /api/bookings — create a booking after OTP (FR-B5..B10, docs/specs/booking-forms.md). */
 export async function POST(req: Request) {
   const { data, response } = await parseBody(req, createBookingRequestSchema);
   if (response) return response;
   if (failsBotCheck(data.bot)) return botRejected();
 
-  const { booking } = data;
+  const parsed = parseBooking(data.booking, "send");
+  if (!parsed.success) {
+    return apiError(400, "invalid", "Please check the highlighted fields.", { fields: fieldErrors(parsed.error) });
+  }
+  const booking = parsed.data;
+
   const token = verifyOtpToken(data.token, "submit");
   if (!token || token.phone !== booking.phone) {
-    return apiError(401, "otp_required", "Please verify your phone number again.");
+    return apiError(401, "otp_required", "For your security, please verify your number again.");
   }
 
   try {
     const db = createAdminClient();
     const ipHash = clientIpHash(req);
 
-    const since = new Date(Date.now() - 60 * 60 * 1000).toISOString();
-    const { count, error: countError } = await db
+    const { data: recent, count, error: countError } = await db
       .from("bookings")
-      .select("id", { count: "exact", head: true })
+      .select("created_at", { count: "exact" })
       .eq("ip_hash", ipHash)
-      .gte("created_at", since);
+      .gte("created_at", new Date(Date.now() - HOUR_MS).toISOString())
+      .order("created_at", { ascending: true })
+      .limit(1);
     if (countError) throw countError;
     if ((count ?? 0) >= SUBMISSIONS_PER_IP_PER_HOUR) {
-      return apiError(429, "rate_limited", "Too many requests from this network. Please try again in an hour.");
+      const oldest = recent?.[0]?.created_at ? new Date(recent[0].created_at).getTime() : Date.now();
+      const retryAfter = Math.max(60, Math.ceil((oldest + HOUR_MS - Date.now()) / 1000));
+      return apiError(
+        429,
+        "rate_limited",
+        "Too many requests from your network. Please try again in a little while.",
+        { retry_after: retryAfter },
+      );
     }
 
     const { data: site } = await db.from("settings").select("value").eq("key", "site").maybeSingle();
     const consentVersion: string = site?.value?.consent_version ?? "unversioned";
 
-    const mapped = await mapBooking(db, booking);
-    if ("error" in mapped) return apiError(400, "invalid", mapped.error, { fields: mapped.fields });
+    const columns = await categoryColumns(db, booking);
+    if (columns.error) return apiError(400, "invalid", columns.error, { fields: columns.fields });
 
     const { data: rows, error } = await db.rpc("create_booking", {
       p: {
@@ -59,12 +73,12 @@ export async function POST(req: Request) {
         phone_verified_at: new Date(token.verifiedAt).toISOString(),
         email: booking.email,
         city: booking.city,
-        preferred_date: booking.preferred_date ?? null,
-        backup_date: booking.backup_date ?? null,
-        source: booking.source,
+        preferred_date: "preferred_date" in booking ? booking.preferred_date : null,
+        backup_date: "backup_date" in booking ? (booking.backup_date ?? null) : null,
+        source: booking.source ?? null,
         consent_version: consentVersion,
         ip_hash: ipHash,
-        ...mapped,
+        ...columns,
       },
     });
 
@@ -72,7 +86,7 @@ export async function POST(req: Request) {
       if (isUniqueViolation(error, "bookings_one_open_per_phone_category")) {
         const { data: existing } = await db
           .from("bookings")
-          .select("booking_code, status")
+          .select("booking_code")
           .eq("phone", booking.phone)
           .eq("category", booking.category)
           .in("status", OPEN_STATUSES as BookingStatus[])
@@ -82,6 +96,9 @@ export async function POST(req: Request) {
         });
       }
       const rule = ruleMessage(error);
+      if (rule?.includes("not open for booking")) {
+        return apiError(409, "meetup_closed", "This meetup is no longer taking bookings. Please choose another.");
+      }
       if (rule) return apiError(409, "rule", rule);
       throw error;
     }
@@ -100,46 +117,39 @@ export async function POST(req: Request) {
       { status: 201 },
     );
   } catch (e) {
-    console.error("bookings", e);
-    return serverError();
+    return serverError("bookings", e);
   }
 }
 
-/** Category-specific columns for create_booking. */
-async function mapBooking(
-  db: ReturnType<typeof createAdminClient>,
-  booking: BookingInput,
-): Promise<
-  | { details: object; budget: number | null; event_id?: string; party_size?: number; attachments: VerifiedUpload[] }
-  | { error: string; fields: Record<string, string> }
-> {
+/**
+ * Category columns for create_booking. `details` holds exactly the spec's keys;
+ * budget, event and party size live on the bookings row.
+ */
+async function categoryColumns(db: ReturnType<typeof createAdminClient>, booking: BookingInput) {
   switch (booking.category) {
-    case "podcast": {
-      const d = booking.details;
+    case "podcast":
+      return { details: booking.details, budget: booking.budget ?? null, attachments: [] };
+    case "fan_meetup":
       return {
-        details: d,
-        budget: d.fee_type === "paid" ? (d.fee_offered ?? null) : null,
+        details: { ...booking.details, consent_rules: true },
+        budget: null,
+        event_id: booking.event_id,
+        party_size: booking.party_size ?? 1,
         attachments: [],
       };
-    }
-    case "fan_meetup": {
-      const { event_id, party_size, ...details } = booking.details;
-      return { details, budget: null, event_id, party_size, attachments: [] };
-    }
     case "misc_event": {
-      const { brief_path, ...details } = booking.details;
-      const attachments: (VerifiedUpload & { kind: "brief" })[] = [];
-      if (brief_path) {
-        const file = await verifyUpload(db, brief_path, "brief", booking.phone);
+      const attachments = [];
+      if (booking.brief_path) {
+        const file = await verifyUpload(db, booking.brief_path, "brief", booking.phone);
         if (!file) {
           return {
             error: "We couldn't find your uploaded brief. Please upload it again.",
-            fields: { "details.brief_path": "Upload the file again" },
+            fields: { brief: "Upload failed. Check your connection and try again." },
           };
         }
-        attachments.push({ ...file, kind: "brief" });
+        attachments.push({ ...file, kind: "brief" as const });
       }
-      return { details, budget: details.budget, attachments };
+      return { details: booking.details, budget: booking.budget, attachments };
     }
   }
 }
