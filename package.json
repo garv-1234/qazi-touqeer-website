@@ -7,7 +7,7 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "test:db": "node supabase/tests/db-rules.test.mjs supabase/migrations/20261015000000_init.sql",
+    "test:db": "node supabase/tests/db-rules.test.mjs supabase/migrations",
     "typecheck": "tsc --noEmit"
   },
   "dependencies": {

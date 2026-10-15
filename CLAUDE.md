@@ -56,9 +56,18 @@ npm run build
 ```
 docs/PRD.md                          Phase 1 spec (requirement IDs FR-W/B/P/N/A, NFR)
 supabase/migrations/*_init.sql       schema, functions, triggers, RLS, seed
-supabase/tests/db-rules.test.mjs     26 database rule tests
+supabase/migrations/*_booking_engine.sql  requester-move guard, OTP, submit_payment, reply, events
+supabase/tests/db-rules.test.mjs     50 database rule tests (applies every migration in order)
 src/lib/supabase/{admin,server,browser}.ts
-src/lib/booking/status.ts            statuses + allowed moves (mirror of DB)
+src/lib/booking/status.ts            statuses + allowed moves + requester moves (mirror of DB)
+src/lib/booking/{categories,events}.ts  booking copy, next-step text, IST/₹ formatting (shared)
+src/lib/booking/{server,track-route}.ts server-only: lookup by code+phone, upload checks, Track view
+src/lib/validation/                  Zod schemas shared by forms and API routes
+src/lib/server/{crypto,http}.ts      hashes, OTP token, body parsing, bot check, IP, PG error mapping
+src/lib/sms/                         SmsProvider interface (dev console provider only for now)
+src/lib/notifications/queue.ts       queues message_log rows ('queued'); step 4 sends them
+src/components/booking/              PhoneVerify, BookingFlow, three category forms
+src/components/track/                Track My Booking client
 src/app/                             pages and API routes
 ```
 
@@ -67,26 +76,32 @@ src/app/                             pages and API routes
 | Step | Dates | Scope | State |
 | --- | --- | --- | --- |
 | 1. Foundation | 15–16 Oct | Next.js, schema, RLS, status trigger, seat locking, tests | **Done** |
-| 2. Booking engine | 17–19 Oct | OTP send/verify, `/api/bookings`, uploads, 3 basic forms, Track My Booking | **Next** |
-| 3. Admin | 20–22 Oct | Staff login, roles, pipeline, request detail, actions, events, settings, audit | — |
+| 2. Booking engine | 17–19 Oct | OTP send/verify, `/api/bookings`, uploads, 3 basic forms, Track My Booking | **Done** |
+| 3. Admin | 20–22 Oct | Staff login, roles, pipeline, request detail, actions, events, settings, audit | **Next** |
 | 4. Payments + messages | 23–25 Oct | Manual payment flow, email, SMS OTP, WhatsApp templates, cron reminders | — |
 | 5. Frontend design | 26–28 Oct | Home, About, Media, Events, FAQ, legal; full design; real content | — |
 | 6. QA + launch | 29–31 Oct | E2E tests, fixes, domain, production keys | — |
 
-### Step 2 plan (start here)
+### How the booking engine works (step 2)
 
-1. `src/lib/validation/` — Zod schemas: common block (FR-B1) + one per category (FR-B2..B4).
-2. OTP: `/api/otp/send`, `/api/otp/verify` using `otp_codes` (hash phone + code with
-   `HASH_SALT`; 6 digits, 10 min expiry, 5 attempts, 5 sends/phone/hour). On success return a
-   short-lived signed token (HMAC with `OTP_TOKEN_SECRET`) bound to the phone + purpose.
-   SMS provider not chosen yet → implement an `SmsProvider` interface with a `console`/dev
-   provider that shows the code in development only.
-3. `/api/bookings` — verify OTP token, validate, rate-limit by IP, call `create_booking`,
-   map the unique-violation on `bookings_one_open_per_phone_category` to "you already have
-   an open request" + existing Booking ID. Queue acknowledgements (step 4 sends them).
-4. `/api/uploads` — signed upload URLs to `booking-files` (PDF/JPEG/PNG/WEBP, ≤10 MB).
-5. Basic pages: `/book`, `/book/podcast`, `/book/fan-meetup`, `/book/event`, `/track`.
-6. `/api/events` and `/api/track*` (status, payment details, UTR submit, cancel).
+- **OTP**: `/api/otp/send` → `public.issue_otp` (5 sends/phone/hour, 20/IP/hour, atomic);
+  `/api/otp/verify` → `public.check_otp` (5 attempts, single use). Phone and code are HMAC'd
+  with `HASH_SALT` before they reach the DB. Success returns a 30-min token
+  (`src/lib/server/crypto.ts`) bound to phone + purpose (`submit` or `track`).
+  Track sends a code only if the Booking ID belongs to that phone, but answers the same either way.
+- **Dev SMS**: with `NODE_ENV=development` the code is logged and returned as `dev_code`.
+  Elsewhere `getSmsProvider()` returns null → 503 until step 4 adds a real provider.
+- **Bot check**: honeypot `website` + `started_at` time trap (`failsBotCheck`). No captcha yet.
+- **Requester moves** are enforced in `transition_booking` (actor `requester` may only reply,
+  submit UTR, or cancel before payment; its patch is ignored). Mirror: `REQUESTER_TRANSITIONS`.
+- **Uploads** go to `<kind>/<hash of phone>/<uuid>.<ext>`; the server re-checks owner folder,
+  size and type with `storage.info()` before saving the attachment row.
+- **Info requests**: Track shows the latest `booking_notes` row with `author_type='staff'`
+  and `internal=false` as the question, so step 3's "request info" action must write that note.
+- **Messages**: `queueMessages()` writes `message_log` rows with status `queued`
+  (requester: email + WhatsApp, or SMS while WhatsApp is off; team: email to staff by role).
+  Nothing sends them yet. That's step 4, along with the template text.
+- Legal pages linked from the consent boxes (`/terms`, `/privacy`, `/refund-policy`) are step 5.
 
 ## Open questions (from the client)
 

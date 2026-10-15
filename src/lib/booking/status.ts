@@ -38,6 +38,23 @@ export function canTransition(from: BookingStatus, to: BookingStatus) {
   return TRANSITIONS[from].includes(to);
 }
 
+/**
+ * The subset of moves a requester (not staff) may make from Track My Booking.
+ * Mirror of public.is_requester_transition() in
+ * supabase/migrations/20261017000000_booking_engine.sql.
+ */
+export const REQUESTER_TRANSITIONS: Partial<Record<BookingStatus, readonly BookingStatus[]>> = {
+  submitted: ["cancelled"],
+  waitlisted: ["cancelled"],
+  in_review: ["cancelled"],
+  info_requested: ["in_review", "cancelled"],
+  payment_pending: ["payment_submitted", "cancelled"],
+};
+
+export function requesterCanTransition(from: BookingStatus, to: BookingStatus) {
+  return REQUESTER_TRANSITIONS[from]?.includes(to) ?? false;
+}
+
 /** Labels shown to staff and requesters. */
 export const STATUS_LABELS: Record<BookingStatus, string> = {
   submitted: "Submitted",

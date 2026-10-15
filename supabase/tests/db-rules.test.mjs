@@ -1,9 +1,14 @@
-// Runs the migration against an in-memory Postgres (PGlite) with a minimal
-// Supabase stub, then checks the database rules.
+// Runs every migration (in file-name order) against an in-memory Postgres
+// (PGlite) with a minimal Supabase stub, then checks the database rules.
+// Usage: node db-rules.test.mjs <migrations dir | single migration file>
 import { PGlite } from '@electric-sql/pglite';
 import fs from 'node:fs';
+import path from 'node:path';
 
-const migration = fs.readFileSync(process.argv[2], 'utf8');
+const target = process.argv[2];
+const files = fs.statSync(target).isDirectory()
+  ? fs.readdirSync(target).filter((f) => f.endsWith('.sql')).sort().map((f) => path.join(target, f))
+  : [target];
 const db = new PGlite();
 
 const stub = `
@@ -29,8 +34,8 @@ const throws = async (name, fn, match) => {
 };
 
 await db.exec(stub);
-await db.exec(migration);
-ok('migration applied', true);
+for (const f of files) await db.exec(fs.readFileSync(f, 'utf8'));
+ok(`${files.length} migration(s) applied`, true);
 
 const base = (o) => JSON.stringify({
   name: 'Test Person', phone: '+919800000001', phone_verified_at: new Date().toISOString(),
@@ -108,6 +113,73 @@ await throws('staff cannot update bookings directly', async () => {
 }, 'no rows updated');
 await throws('anon cannot call create_booking', () => as('anon', null, `select public.create_booking('{}'::jsonb)`), 'permission denied');
 ok('anon sees published events only', (await as('anon', null, 'select * from public.events')).length === 1);
+
+// 7. requester-only moves (step 2)
+const asRequester = (id, to, reason = 'test') => db.query(
+  `select status from public.transition_booking($1, $2::public.booking_status, 'requester', null, $3)`, [id, to, reason]);
+const c = await create({ category: 'podcast', phone: '+919800000021' });
+await throws('requester cannot start a review', () => asRequester(c.id, 'in_review'), 'Requester cannot');
+await asRequester(c.id, 'cancelled');
+const ch = (await db.query(`select actor_type from public.booking_status_history where booking_id=$1 and to_status='cancelled'`, [c.id])).rows[0];
+ok('requester can cancel before payment; history says requester', ch?.actor_type === 'requester');
+const d0 = await create({ category: 'podcast', phone: '+919800000023' });
+await db.query(`select public.transition_booking($1, 'cancelled', 'requester', null, 'x', '{"advance_amount": 1}'::jsonb)`, [d0.id]);
+ok('requester cannot set staff fields (patch ignored)',
+  (await db.query(`select advance_amount from public.bookings where id=$1`, [d0.id])).rows[0].advance_amount === null);
+
+// 8. attachments saved with the booking
+const e1 = await create({ category: 'misc_event', phone: '+919800000024', budget: '100000',
+  attachments: [{ kind: 'brief', storage_path: 'brief/abc/x.pdf', mime_type: 'application/pdf', size_bytes: 1234 }] });
+ok('create_booking saves attachments', (await db.query(`select count(*)::int n from public.attachments where booking_id=$1`, [e1.id])).rows[0].n === 1);
+
+// 9. OTP issue / check
+const issue = async (phone, code, ip = 'ip-1', ttl = 600) =>
+  (await db.query(`select public.issue_otp($1, 'submit', $2, $3, $4) r`, [phone, code, ip, ttl])).rows[0].r;
+const check = async (phone, code) =>
+  (await db.query(`select * from public.check_otp($1, 'submit', $2)`, [phone, code])).rows[0];
+ok('OTP issued', await issue('ph-1', 'code-1') === 'ok');
+const w = await check('ph-1', 'wrong');
+ok('wrong OTP counts an attempt', w.result === 'invalid' && w.attempts_left === 4);
+ok('right OTP verifies', (await check('ph-1', 'code-1')).result === 'ok');
+ok('verified OTP cannot be reused', (await check('ph-1', 'code-1')).result === 'none');
+for (let i = 0; i < 3; i++) await issue('ph-1', 'code-x');
+ok('5th send in an hour allowed', await issue('ph-1', 'code-5') === 'ok');
+ok('6th send in an hour refused', await issue('ph-1', 'code-6') === 'phone_limit');
+await issue('ph-2', 'code-2');
+for (let i = 0; i < 4; i++) await check('ph-2', 'wrong');
+ok('5th wrong attempt locks the code', (await check('ph-2', 'wrong')).result === 'too_many');
+ok('locked code refuses even the right code', (await check('ph-2', 'code-2')).result === 'too_many');
+await issue('ph-3', 'code-3', 'ip-1', 0);
+ok('expired OTP refused', (await check('ph-3', 'code-3')).result === 'expired');
+for (let p = 0; p < 4; p++) for (let i = 0; i < 5; i++) if (await issue(`ip-ph-${p}`, 'c', 'ip-9') !== 'ok') ok('setup ip sends', false);
+ok('21st send from one IP in an hour refused', await issue('ip-ph-9', 'c', 'ip-9') === 'ip_limit');
+
+// 10. submit_payment
+const pay = (id, utr, shot = null) => db.query(
+  `select * from public.submit_payment($1, 'upi', 5000, $2, current_date, $3::jsonb)`, [id, utr, shot && JSON.stringify(shot)]);
+await throws('submit_payment refuses a UTR already in use', () => pay(a.id, '412345678901'), 'payments_utr_unique');
+ok('failed UTR leaves booking in payment_pending', (await db.query(`select status from public.bookings where id=$1`, [a.id])).rows[0].status === 'payment_pending');
+await pay(a.id, '512345678901', { storage_path: 'payment_screenshot/abc/s.png', mime_type: 'image/png', size_bytes: 99 });
+const ap = (await db.query(`select b.status, p.amount_due, (select count(*)::int from public.attachments t where t.booking_id=b.id) n
+  from public.bookings b join public.payments p on p.booking_id=b.id and p.utr='512345678901' where b.id=$1`, [a.id])).rows[0];
+ok('UTR moves booking to payment_submitted with amount due and screenshot', ap.status === 'payment_submitted' && Number(ap.amount_due) === 5000 && ap.n === 1);
+await throws('second UTR on a payment_submitted booking refused', () => pay(a.id, '612345678901'), 'not waiting for a payment');
+await throws('requester cannot cancel after paying', () => asRequester(a.id, 'cancelled'), 'Requester cannot');
+
+// 11. requester_reply
+const d = await create({ category: 'podcast', phone: '+919800000022' });
+await throws('reply refused when no info was requested', () => db.query(`select public.requester_reply($1, 'hi')`, [d.id]), 'not waiting for a reply');
+await move(d.id, 'in_review'); await move(d.id, 'info_requested');
+await db.query(`select public.requester_reply($1, 'Here are the links')`, [d.id]);
+const dr = (await db.query(`select b.status, n.internal, n.author_type from public.bookings b join public.booking_notes n on n.booking_id=b.id where b.id=$1`, [d.id])).rows[0];
+ok('reply saves a visible note and returns to in_review', dr.status === 'in_review' && dr.internal === false && dr.author_type === 'requester');
+
+// 12. published_events and grants
+await db.query(`insert into public.events (title, city, venue, starts_at, capacity, status) values ('Draft','Pune','X', now() + interval '5 days', 10, 'draft')`);
+const pe = (await db.query(`select * from public.published_events()`)).rows;
+ok('published_events lists only published future events with seats left', pe.length === 1 && pe[0].seats_left === 2);
+await throws('anon cannot call issue_otp', () => as('anon', null, `select public.issue_otp('a', 'submit', 'b')`), 'permission denied');
+await throws('anon cannot call submit_payment', () => as('anon', null, `select public.submit_payment(gen_random_uuid(), 'upi', 1, 'X12345', current_date)`), 'permission denied');
 
 console.log(`\n${pass} passed, ${fail} failed`);
 process.exit(fail ? 1 : 0);
